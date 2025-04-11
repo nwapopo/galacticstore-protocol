@@ -376,3 +376,73 @@
     )
   )
 )
+
+;; Suspend container operations
+(define-public (suspend-container-activity (container-id uint) (reason (string-ascii 100)))
+  (begin
+    (asserts! (valid-container-id? container-id) ERROR_INVALID_CONTAINER_ID)
+    (let
+      (
+        (container-data (unwrap! (map-get? ContainerRegistry { container-id: container-id }) ERROR_CONTAINER_MISSING))
+        (originator (get originator container-data))
+        (beneficiary (get beneficiary container-data))
+      )
+      (asserts! (or (is-eq tx-sender NETWORK_CONTROLLER) (is-eq tx-sender originator) (is-eq tx-sender beneficiary)) ERROR_ACCESS_DENIED)
+      (asserts! (or (is-eq (get container-status container-data) "pending") 
+                   (is-eq (get container-status container-data) "accepted")) 
+                ERROR_ALREADY_PROCESSED)
+      (map-set ContainerRegistry
+        { container-id: container-id }
+        (merge container-data { container-status: "suspended" })
+      )
+      (print {action: "container_suspended", container-id: container-id, reporter: tx-sender, reason: reason})
+      (ok true)
+    )
+  )
+)
+
+;; Create multi-phase asset delivery container
+(define-public (create-phased-container (beneficiary principal) (asset-id uint) (quantity uint) (segments uint))
+  (let 
+    (
+      (new-id (+ (var-get next-container-id) u1))
+      (terminal-block (+ block-height CONTAINER_LIFESPAN_BLOCKS))
+      (segment-quantity (/ quantity segments))
+    )
+    (asserts! (> quantity u0) ERROR_INVALID_QUANTITY)
+    (asserts! (> segments u0) ERROR_INVALID_QUANTITY)
+    (asserts! (<= segments u5) ERROR_INVALID_QUANTITY) ;; Max 5 segments
+    (asserts! (valid-beneficiary? beneficiary) ERROR_INVALID_ORIGINATOR)
+    (asserts! (is-eq (* segment-quantity segments) quantity) (err u121)) ;; Ensure even division
+    (match (stx-transfer? quantity tx-sender (as-contract tx-sender))
+      success
+        (begin
+          (var-set next-container-id new-id)
+          (print {action: "phased_container_created", container-id: new-id, originator: tx-sender, beneficiary: beneficiary, 
+                  asset-id: asset-id, quantity: quantity, segments: segments, segment-quantity: segment-quantity})
+          (ok new-id)
+        )
+      error ERROR_ASSET_MOVEMENT_FAILED
+    )
+  )
+)
+
+;; Register secondary authorization for high-value transactions
+(define-public (register-secondary-authorization (container-id uint) (authorizer principal))
+  (begin
+    (asserts! (valid-container-id? container-id) ERROR_INVALID_CONTAINER_ID)
+    (let
+      (
+        (container-data (unwrap! (map-get? ContainerRegistry { container-id: container-id }) ERROR_CONTAINER_MISSING))
+        (originator (get originator container-data))
+        (quantity (get quantity container-data))
+      )
+      ;; Only for high-value containers (> 1000 STX)
+      (asserts! (> quantity u1000) (err u120))
+      (asserts! (or (is-eq tx-sender originator) (is-eq tx-sender NETWORK_CONTROLLER)) ERROR_ACCESS_DENIED)
+      (asserts! (is-eq (get container-status container-data) "pending") ERROR_ALREADY_PROCESSED)
+      (print {action: "authorization_registered", container-id: container-id, authorizer: authorizer, requestor: tx-sender})
+      (ok true)
+    )
+  )
+)
