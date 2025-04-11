@@ -669,3 +669,71 @@
     )
   )
 )
+
+;; Request emergency lockdown of a container
+(define-public (emergency-container-lockdown (container-id uint) (security-breach-evidence (buff 64)))
+  (begin
+    (asserts! (valid-container-id? container-id) ERROR_INVALID_CONTAINER_ID)
+    (let
+      (
+        (container-data (unwrap! (map-get? ContainerRegistry { container-id: container-id }) ERROR_CONTAINER_MISSING))
+        (originator (get originator container-data))
+        (beneficiary (get beneficiary container-data))
+        (lockdown-period u144) ;; 24 hour lockdown
+      )
+      (asserts! (or (is-eq tx-sender originator) 
+                    (is-eq tx-sender beneficiary) 
+                    (is-eq tx-sender NETWORK_CONTROLLER)) ERROR_ACCESS_DENIED)
+      (asserts! (or (is-eq (get container-status container-data) "pending") 
+                    (is-eq (get container-status container-data) "accepted") 
+                    (is-eq (get container-status container-data) "timelock")) ERROR_ALREADY_PROCESSED)
+      (asserts! (> (len security-breach-evidence) u0) (err u240)) ;; Evidence must not be empty
+
+      ;; Extend expiration to allow for investigation
+      (map-set ContainerRegistry
+        { container-id: container-id }
+        (merge container-data { 
+          container-status: "lockdown", 
+          expiration-block: (+ block-height lockdown-period CONTAINER_LIFESPAN_BLOCKS)
+        })
+      )
+      (print {action: "emergency_lockdown", container-id: container-id, 
+              reporter: tx-sender, evidence-hash: (hash160 security-breach-evidence), 
+              lockdown-until: (+ block-height lockdown-period)})
+      (ok true)
+    )
+  )
+)
+
+;; Configure multi-signature approval requirement for container operations
+(define-public (configure-multisig-requirement (container-id uint) (required-approvals uint) (approvers (list 5 principal)))
+  (begin
+    (asserts! (valid-container-id? container-id) ERROR_INVALID_CONTAINER_ID)
+    (asserts! (> required-approvals u1) ERROR_INVALID_QUANTITY) ;; Minimum 2 approvals required
+    (asserts! (<= required-approvals (len approvers)) (err u250)) ;; Required approvals must not exceed approvers count
+    (asserts! (<= required-approvals u5) ERROR_INVALID_QUANTITY) ;; Maximum 5 approvals
+    (let
+      (
+        (container-data (unwrap! (map-get? ContainerRegistry { container-id: container-id }) ERROR_CONTAINER_MISSING))
+        (originator (get originator container-data))
+        (quantity (get quantity container-data))
+      )
+      ;; Only for high-value containers
+      (asserts! (> quantity u10000) (err u251))
+      (asserts! (is-eq tx-sender originator) ERROR_ACCESS_DENIED)
+      (asserts! (is-eq (get container-status container-data) "pending") ERROR_ALREADY_PROCESSED)
+
+      ;; Validate approvers list (no duplicates and doesn't include originator)
+      (asserts! (not (is-some (index-of approvers originator))) (err u252)) ;; Originator cannot be an approver
+
+      (map-set ContainerRegistry
+        { container-id: container-id }
+        (merge container-data { container-status: "multisig" })
+      )
+      (print {action: "multisig_configured", container-id: container-id, originator: originator, 
+              required-approvals: required-approvals, approvers: approvers})
+      (ok true)
+    )
+  )
+)
+
