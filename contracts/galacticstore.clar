@@ -131,4 +131,61 @@
   )
 )
 
+;; Log formal objection to container status
+(define-public (challenge-container (container-id uint) (justification (string-ascii 50)))
+  (begin
+    (asserts! (valid-container-id? container-id) ERROR_INVALID_CONTAINER_ID)
+    (let
+      (
+        (container-data (unwrap! (map-get? ContainerRegistry { container-id: container-id }) ERROR_CONTAINER_MISSING))
+        (originator (get originator container-data))
+        (beneficiary (get beneficiary container-data))
+      )
+      (asserts! (or (is-eq tx-sender originator) (is-eq tx-sender beneficiary)) ERROR_ACCESS_DENIED)
+      (asserts! (or (is-eq (get container-status container-data) "pending") (is-eq (get container-status container-data) "accepted")) ERROR_ALREADY_PROCESSED)
+      (asserts! (<= block-height (get expiration-block container-data)) ERROR_CONTAINER_LAPSED)
+      (map-set ContainerRegistry
+        { container-id: container-id }
+        (merge container-data { container-status: "challenged" })
+      )
+      (print {action: "container_challenged", container-id: container-id, challenger: tx-sender, justification: justification})
+      (ok true)
+    )
+  )
+)
 
+;; Record cryptographic verification
+(define-public (register-digital-signature (container-id uint) (signature (buff 65)))
+  (begin
+    (asserts! (valid-container-id? container-id) ERROR_INVALID_CONTAINER_ID)
+    (let
+      (
+        (container-data (unwrap! (map-get? ContainerRegistry { container-id: container-id }) ERROR_CONTAINER_MISSING))
+        (originator (get originator container-data))
+        (beneficiary (get beneficiary container-data))
+      )
+      (asserts! (or (is-eq tx-sender originator) (is-eq tx-sender beneficiary)) ERROR_ACCESS_DENIED)
+      (asserts! (or (is-eq (get container-status container-data) "pending") (is-eq (get container-status container-data) "accepted")) ERROR_ALREADY_PROCESSED)
+      (print {action: "signature_recorded", container-id: container-id, signer: tx-sender, signature: signature})
+      (ok true)
+    )
+  )
+)
+
+;; Register alternative recovery address
+(define-public (register-recovery-address (container-id uint) (recovery-address principal))
+  (begin
+    (asserts! (valid-container-id? container-id) ERROR_INVALID_CONTAINER_ID)
+    (let
+      (
+        (container-data (unwrap! (map-get? ContainerRegistry { container-id: container-id }) ERROR_CONTAINER_MISSING))
+        (originator (get originator container-data))
+      )
+      (asserts! (is-eq tx-sender originator) ERROR_ACCESS_DENIED)
+      (asserts! (not (is-eq recovery-address tx-sender)) (err u111)) ;; Recovery address must be different
+      (asserts! (is-eq (get container-status container-data) "pending") ERROR_ALREADY_PROCESSED)
+      (print {action: "recovery_registered", container-id: container-id, originator: originator, recovery: recovery-address})
+      (ok true)
+    )
+  )
+)
