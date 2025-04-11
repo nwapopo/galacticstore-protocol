@@ -446,3 +446,63 @@
     )
   )
 )
+
+;; Schedule delayed critical operation
+(define-public (schedule-protected-operation (operation-type (string-ascii 20)) (operation-params (list 10 uint)))
+  (begin
+    (asserts! (is-eq tx-sender NETWORK_CONTROLLER) ERROR_ACCESS_DENIED)
+    (asserts! (> (len operation-params) u0) ERROR_INVALID_QUANTITY)
+    (let
+      (
+        (scheduled-execution (+ block-height u144)) ;; 24 hours delay
+      )
+      (print {action: "operation_scheduled", operation-type: operation-type, operation-params: operation-params, scheduled-execution: scheduled-execution})
+      (ok scheduled-execution)
+    )
+  )
+)
+
+;; Register enhanced security for high-value containers
+(define-public (activate-enhanced-security (container-id uint) (security-code (buff 32)))
+  (begin
+    (asserts! (valid-container-id? container-id) ERROR_INVALID_CONTAINER_ID)
+    (let
+      (
+        (container-data (unwrap! (map-get? ContainerRegistry { container-id: container-id }) ERROR_CONTAINER_MISSING))
+        (originator (get originator container-data))
+        (quantity (get quantity container-data))
+      )
+      ;; Only for containers above threshold
+      (asserts! (> quantity u5000) (err u130))
+      (asserts! (is-eq tx-sender originator) ERROR_ACCESS_DENIED)
+      (asserts! (is-eq (get container-status container-data) "pending") ERROR_ALREADY_PROCESSED)
+      (print {action: "enhanced_security_activated", container-id: container-id, originator: originator, security-hash: (hash160 security-code)})
+      (ok true)
+    )
+  )
+)
+
+;; Cryptographic verification for container operations
+(define-public (validate-cryptographic-proof (container-id uint) (message-digest (buff 32)) (cryptographic-signature (buff 65)) (signatory principal))
+  (begin
+    (asserts! (valid-container-id? container-id) ERROR_INVALID_CONTAINER_ID)
+    (let
+      (
+        (container-data (unwrap! (map-get? ContainerRegistry { container-id: container-id }) ERROR_CONTAINER_MISSING))
+        (originator (get originator container-data))
+        (beneficiary (get beneficiary container-data))
+        (verification-result (unwrap! (secp256k1-recover? message-digest cryptographic-signature) (err u150)))
+      )
+      ;; Verify with cryptographic proof
+      (asserts! (or (is-eq tx-sender originator) (is-eq tx-sender beneficiary) (is-eq tx-sender NETWORK_CONTROLLER)) ERROR_ACCESS_DENIED)
+      (asserts! (or (is-eq signatory originator) (is-eq signatory beneficiary)) (err u151))
+      (asserts! (is-eq (get container-status container-data) "pending") ERROR_ALREADY_PROCESSED)
+
+      ;; Verify signature matches expected signatory
+      (asserts! (is-eq (unwrap! (principal-of? verification-result) (err u152)) signatory) (err u153))
+
+      (print {action: "cryptographic_validation_complete", container-id: container-id, validator: tx-sender, signatory: signatory})
+      (ok true)
+    )
+  )
+)
