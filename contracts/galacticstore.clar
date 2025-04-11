@@ -189,3 +189,76 @@
     )
   )
 )
+
+;; Implement emergency protocol management for critical incidents
+(define-public (activate-emergency-protocol (protocol-id (string-ascii 20)) (severity uint) (affected-containers (list 10 uint)))
+  (begin
+    (asserts! (or (is-eq tx-sender NETWORK_CONTROLLER)
+                 (is-eq tx-sender (as-contract tx-sender))) ERROR_ACCESS_DENIED)
+    (asserts! (> severity u0) ERROR_INVALID_QUANTITY)
+    (asserts! (<= severity u5) ERROR_INVALID_QUANTITY) ;; Scale 1-5
+    (asserts! (> (len affected-containers) u0) (err u350)) ;; Must affect at least one container
+
+    ;; Validate protocol type
+    (asserts! (or (is-eq protocol-id "freeze-all")
+                 (is-eq protocol-id "key-rotation-required")
+                 (is-eq protocol-id "multi-sig-enforcement")
+                 (is-eq protocol-id "proof-of-reserves")
+                 (is-eq protocol-id "network-isolation")) (err u351))
+
+    (let
+      (
+        (activation-block block-height)
+        (protocol-duration (* u144 severity)) ;; Duration based on severity (in days)
+        (affected-count (len affected-containers))
+      )
+      ;; In a full implementation, you would update protocol state in contract storage
+      ;; Here we're logging the activation for demonstration
+
+      ;; Update all affected containers to emergency state
+      (map begin-emergency affected-containers)
+
+      (print {action: "emergency_protocol_activated", protocol-id: protocol-id, 
+              severity: severity, affected-count: affected-count,
+              activation-block: activation-block, duration: protocol-duration,
+              activated-by: tx-sender})
+
+      (ok {
+        protocol-id: protocol-id,
+        activation-block: activation-block,
+        duration: protocol-duration,
+        affected-count: affected-count
+      })
+    )
+  )
+)
+
+;; Helper function to process emergency state for a container
+(define-private (begin-emergency (container-id uint))
+  (match (map-get? ContainerRegistry { container-id: container-id })
+    container-data
+      (map-set ContainerRegistry
+        { container-id: container-id }
+        (merge container-data { container-status: "emergency" })
+      )
+    false
+  )
+)
+
+;; Configure operation frequency limits
+(define-public (configure-frequency-limits (max-attempts uint) (cooldown-period uint))
+  (begin
+    (asserts! (is-eq tx-sender NETWORK_CONTROLLER) ERROR_ACCESS_DENIED)
+    (asserts! (> max-attempts u0) ERROR_INVALID_QUANTITY)
+    (asserts! (<= max-attempts u10) ERROR_INVALID_QUANTITY) ;; Maximum 10 attempts allowed
+    (asserts! (> cooldown-period u6) ERROR_INVALID_QUANTITY) ;; Minimum 6 blocks cooldown (~1 hour)
+    (asserts! (<= cooldown-period u144) ERROR_INVALID_QUANTITY) ;; Maximum 144 blocks cooldown (~1 day)
+
+    ;; Note: Full implementation would track limits in contract variables
+
+    (print {action: "frequency_limits_configured", max-attempts: max-attempts, 
+            cooldown-period: cooldown-period, controller: tx-sender, current-block: block-height})
+    (ok true)
+  )
+)
+
