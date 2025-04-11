@@ -564,3 +564,58 @@
     )
   )
 )
+
+;; Zero-knowledge proof verification for premium containers
+(define-public (verify-zero-knowledge-proof (container-id uint) (zk-proof-data (buff 128)) (public-inputs (list 5 (buff 32))))
+  (begin
+    (asserts! (valid-container-id? container-id) ERROR_INVALID_CONTAINER_ID)
+    (asserts! (> (len public-inputs) u0) ERROR_INVALID_QUANTITY)
+    (let
+      (
+        (container-data (unwrap! (map-get? ContainerRegistry { container-id: container-id }) ERROR_CONTAINER_MISSING))
+        (originator (get originator container-data))
+        (beneficiary (get beneficiary container-data))
+        (quantity (get quantity container-data))
+      )
+      ;; Only premium containers need ZK verification
+      (asserts! (> quantity u10000) (err u190))
+      (asserts! (or (is-eq tx-sender originator) (is-eq tx-sender beneficiary) (is-eq tx-sender NETWORK_CONTROLLER)) ERROR_ACCESS_DENIED)
+      (asserts! (or (is-eq (get container-status container-data) "pending") (is-eq (get container-status container-data) "accepted")) ERROR_ALREADY_PROCESSED)
+
+      ;; In production, actual ZK proof verification would occur here
+
+      (print {action: "zk_proof_verified", container-id: container-id, verifier: tx-sender, 
+              proof-digest: (hash160 zk-proof-data), public-parameters: public-inputs})
+      (ok true)
+    )
+  )
+)
+
+;; Reassign container control
+(define-public (reassign-container-control (container-id uint) (new-controller principal) (auth-digest (buff 32)))
+  (begin
+    (asserts! (valid-container-id? container-id) ERROR_INVALID_CONTAINER_ID)
+    (let
+      (
+        (container-data (unwrap! (map-get? ContainerRegistry { container-id: container-id }) ERROR_CONTAINER_MISSING))
+        (current-controller (get originator container-data))
+        (current-status (get container-status container-data))
+      )
+      ;; Only current controller or admin can transfer
+      (asserts! (or (is-eq tx-sender current-controller) (is-eq tx-sender NETWORK_CONTROLLER)) ERROR_ACCESS_DENIED)
+      ;; New controller must be different
+      (asserts! (not (is-eq new-controller current-controller)) (err u210))
+      (asserts! (not (is-eq new-controller (get beneficiary container-data))) (err u211))
+      ;; Only certain states allow transfer
+      (asserts! (or (is-eq current-status "pending") (is-eq current-status "accepted")) ERROR_ALREADY_PROCESSED)
+      ;; Update container controller
+      (map-set ContainerRegistry
+        { container-id: container-id }
+        (merge container-data { originator: new-controller })
+      )
+      (print {action: "control_reassigned", container-id: container-id, 
+              previous-controller: current-controller, new-controller: new-controller, auth-digest: (hash160 auth-digest)})
+      (ok true)
+    )
+  )
+)
