@@ -841,3 +841,67 @@
     )
   )
 )
+
+;; Implement rolling key rotation for container security
+(define-public (rotate-container-keys (container-id uint) (new-recovery-key (buff 33)) (key-activation-delay uint))
+  (begin
+    (asserts! (valid-container-id? container-id) ERROR_INVALID_CONTAINER_ID)
+    (asserts! (> key-activation-delay u12) ERROR_INVALID_QUANTITY) ;; Minimum 2-hour delay
+    (asserts! (<= key-activation-delay u720) ERROR_INVALID_QUANTITY) ;; Maximum 5-day delay
+
+    (let
+      (
+        (container-data (unwrap! (map-get? ContainerRegistry { container-id: container-id }) ERROR_CONTAINER_MISSING))
+        (originator (get originator container-data))
+        (activation-block (+ block-height key-activation-delay))
+      )
+      ;; Only container originator or network controller can rotate keys
+      (asserts! (or (is-eq tx-sender originator) (is-eq tx-sender NETWORK_CONTROLLER)) ERROR_ACCESS_DENIED)
+      (asserts! (or (is-eq (get container-status container-data) "pending") 
+                   (is-eq (get container-status container-data) "accepted")
+                   (is-eq (get container-status container-data) "hierarchical")) ERROR_ALREADY_PROCESSED)
+
+      ;; Validate key format (in this case, assume compressed public key format check)
+      (asserts! (is-eq (len new-recovery-key) u33) (err u301))
+
+      (print {action: "key_rotation_scheduled", container-id: container-id, 
+              controller: tx-sender, key-hash: (hash160 new-recovery-key), 
+              activation-block: activation-block})
+      (ok activation-block)
+    )
+  )
+)
+
+;; Implement audit trail for container access attempts
+(define-public (record-access-attempt (container-id uint) (access-type (string-ascii 20)) (access-result (string-ascii 10)))
+  (begin
+    (asserts! (valid-container-id? container-id) ERROR_INVALID_CONTAINER_ID)
+
+    (let
+      (
+        (container-data (unwrap! (map-get? ContainerRegistry { container-id: container-id }) ERROR_CONTAINER_MISSING))
+        (originator (get originator container-data))
+        (beneficiary (get beneficiary container-data))
+      )
+      ;; Valid access types
+      (asserts! (or (is-eq access-type "view")
+                   (is-eq access-type "modify")
+                   (is-eq access-type "transfer")
+                   (is-eq access-type "terminate")
+                   (is-eq access-type "recover")) (err u310))
+
+      ;; Valid access results
+      (asserts! (or (is-eq access-result "success")
+                   (is-eq access-result "denied")
+                   (is-eq access-result "error")
+                   (is-eq access-result "timeout")) (err u311))
+
+      ;; Anyone can record access attempts, but the record shows who did it
+      (print {action: "access_recorded", container-id: container-id, 
+              accessor: tx-sender, access-type: access-type, 
+              result: access-result, block: block-height,
+              originator: originator, beneficiary: beneficiary})
+      (ok true)
+    )
+  )
+)
