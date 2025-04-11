@@ -982,3 +982,71 @@
     )
   )
 )
+
+;; Implement velocity monitoring for unusual transaction patterns
+(define-public (verify-transaction-velocity (originator principal) (transaction-count uint) (time-window uint) (transaction-volume uint))
+  (begin
+    (asserts! (is-eq tx-sender NETWORK_CONTROLLER) ERROR_ACCESS_DENIED)
+    (asserts! (> transaction-count u0) ERROR_INVALID_QUANTITY)
+    (asserts! (> time-window u0) ERROR_INVALID_QUANTITY)
+    (asserts! (<= time-window u1440) ERROR_INVALID_QUANTITY) ;; Max window ~10 days
+    (asserts! (> transaction-volume u0) ERROR_INVALID_QUANTITY)
+
+    (let
+      (
+        (velocity-score (/ (* transaction-volume transaction-count) time-window))
+        (threshold u100000) ;; Example threshold
+        (cooldown-period (+ u24 (/ transaction-count u10))) ;; Base + proportional period
+      )
+      ;; Check if velocity exceeds threshold
+      (if (> velocity-score threshold)
+        (begin
+          ;; In a full implementation, you would place restrictions on the originator
+          ;; Here we're just logging the event for demonstration
+          (print {action: "velocity_limit_exceeded", originator: originator, 
+                  transaction-count: transaction-count, time-window: time-window,
+                  transaction-volume: transaction-volume, velocity-score: velocity-score,
+                  cooldown-period: cooldown-period, current-block: block-height})
+          (ok false) ;; Return false to indicate threshold exceeded
+        )
+        (begin
+          (print {action: "velocity_check_passed", originator: originator, 
+                  velocity-score: velocity-score, threshold: threshold})
+          (ok true) ;; Return true to indicate check passed
+        )
+      )
+    )
+  )
+)
+
+;; Implement trusted device registration for enhanced security
+(define-public (register-trusted-device (device-fingerprint (buff 32)) (device-name (string-ascii 30)) (device-pubkey (buff 33)))
+  (begin
+    ;; Validate device parameters
+    (asserts! (> (len device-name) u3) ERROR_INVALID_QUANTITY) ;; Device name must be meaningful
+    (asserts! (is-eq (len device-pubkey) u33) (err u340)) ;; Must be a valid compressed pubkey
+
+    (let
+      (
+        (registration-block block-height)
+        (expiration-block (+ block-height u4320)) ;; Expires after ~30 days
+      )
+      ;; In a full implementation, you would store this in a map
+      ;; Here we're logging the registration for demonstration
+
+      (print {action: "device_registered", owner: tx-sender, 
+              device-name: device-name, device-fingerprint: device-fingerprint,
+              pubkey-hash: (hash160 device-pubkey), registration-block: registration-block,
+              expiration-block: expiration-block})
+
+      ;; Return the registration details
+      (ok {
+        owner: tx-sender,
+        device-fingerprint: device-fingerprint,
+        registration-block: registration-block,
+        expiration-block: expiration-block
+      })
+    )
+  )
+)
+
