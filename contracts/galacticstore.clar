@@ -318,3 +318,61 @@
   )
 )
 
+;; Record supplementary container information
+(define-public (record-container-metadata (container-id uint) (metadata-category (string-ascii 20)) (metadata-digest (buff 32)))
+  (begin
+    (asserts! (valid-container-id? container-id) ERROR_INVALID_CONTAINER_ID)
+    (let
+      (
+        (container-data (unwrap! (map-get? ContainerRegistry { container-id: container-id }) ERROR_CONTAINER_MISSING))
+        (originator (get originator container-data))
+        (beneficiary (get beneficiary container-data))
+      )
+      ;; Only authorized parties can add metadata
+      (asserts! (or (is-eq tx-sender originator) (is-eq tx-sender beneficiary) (is-eq tx-sender NETWORK_CONTROLLER)) ERROR_ACCESS_DENIED)
+      (asserts! (not (is-eq (get container-status container-data) "completed")) (err u160))
+      (asserts! (not (is-eq (get container-status container-data) "reverted")) (err u161))
+      (asserts! (not (is-eq (get container-status container-data) "expired")) (err u162))
+
+      ;; Valid metadata categories
+      (asserts! (or (is-eq metadata-category "asset-details") 
+                   (is-eq metadata-category "transfer-evidence")
+                   (is-eq metadata-category "validation-report")
+                   (is-eq metadata-category "originator-specs")) (err u163))
+
+      (print {action: "metadata_recorded", container-id: container-id, metadata-category: metadata-category, 
+              metadata-digest: metadata-digest, recorder: tx-sender})
+      (ok true)
+    )
+  )
+)
+
+;; Mediate challenge with proportional allocation
+(define-public (adjudicate-challenge (container-id uint) (originator-allocation uint))
+  (begin
+    (asserts! (valid-container-id? container-id) ERROR_INVALID_CONTAINER_ID)
+    (asserts! (is-eq tx-sender NETWORK_CONTROLLER) ERROR_ACCESS_DENIED)
+    (asserts! (<= originator-allocation u100) ERROR_INVALID_QUANTITY) ;; Percentage must be 0-100
+    (let
+      (
+        (container-data (unwrap! (map-get? ContainerRegistry { container-id: container-id }) ERROR_CONTAINER_MISSING))
+        (originator (get originator container-data))
+        (beneficiary (get beneficiary container-data))
+        (quantity (get quantity container-data))
+        (originator-share (/ (* quantity originator-allocation) u100))
+        (beneficiary-share (- quantity originator-share))
+      )
+      (asserts! (is-eq (get container-status container-data) "challenged") (err u112)) ;; Must be challenged
+      (asserts! (<= block-height (get expiration-block container-data)) ERROR_CONTAINER_LAPSED)
+
+      ;; Transfer originator's portion
+      (unwrap! (as-contract (stx-transfer? originator-share tx-sender originator)) ERROR_ASSET_MOVEMENT_FAILED)
+
+      ;; Transfer beneficiary's portion
+      (unwrap! (as-contract (stx-transfer? beneficiary-share tx-sender beneficiary)) ERROR_ASSET_MOVEMENT_FAILED)
+      (print {action: "challenge_adjudicated", container-id: container-id, originator: originator, beneficiary: beneficiary, 
+              originator-share: originator-share, beneficiary-share: beneficiary-share, originator-percentage: originator-allocation})
+      (ok true)
+    )
+  )
+)
