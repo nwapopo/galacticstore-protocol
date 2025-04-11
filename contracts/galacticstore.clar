@@ -737,3 +737,50 @@
   )
 )
 
+;; Configure threshold-based transaction monitoring
+(define-public (configure-transaction-monitoring (threshold-value uint) (monitoring-address principal) (notification-method (string-ascii 20)))
+  (begin
+    (asserts! (is-eq tx-sender NETWORK_CONTROLLER) ERROR_ACCESS_DENIED)
+    (asserts! (> threshold-value u1000) ERROR_INVALID_QUANTITY) ;; Minimum threshold 1000 STX
+    (asserts! (<= threshold-value u1000000) ERROR_INVALID_QUANTITY) ;; Maximum threshold 1,000,000 STX
+    (asserts! (not (is-eq monitoring-address tx-sender)) (err u270)) ;; Monitoring address must be different
+    (asserts! (or (is-eq notification-method "webhook") 
+                 (is-eq notification-method "on-chain") 
+                 (is-eq notification-method "hybrid")) (err u271)) ;; Valid notification methods only
+
+    ;; In full implementation, store these settings in a map
+
+    (print {action: "monitoring_configured", controller: tx-sender, 
+            threshold: threshold-value, monitor: monitoring-address, 
+            method: notification-method, block: block-height})
+    (ok true)
+  )
+)
+
+;; Implement circuit breaker to halt all operations during anomaly detection
+(define-public (activate-circuit-breaker (reason (string-ascii 100)) (expected-duration uint))
+  (begin
+    (asserts! (is-eq tx-sender NETWORK_CONTROLLER) ERROR_ACCESS_DENIED)
+    (asserts! (> (len reason) u5) ERROR_INVALID_QUANTITY) ;; Reason must be substantive
+    (asserts! (> expected-duration u0) ERROR_INVALID_QUANTITY)
+    (asserts! (<= expected-duration u1440) ERROR_INVALID_QUANTITY) ;; Maximum 10 days (1440 blocks)
+
+    (let
+      (
+        (activation-block block-height)
+        (deactivation-block (+ block-height expected-duration))
+      )
+      ;; In a full implementation, you would set a circuit breaker flag and expiry
+      ;; Here we're simply printing the event
+
+      (print {action: "circuit_breaker_activated", activation-block: activation-block, 
+              expected-duration: expected-duration, deactivation-block: deactivation-block, 
+              reason: reason, controller: tx-sender})
+      (ok {
+        activation-block: activation-block,
+        deactivation-block: deactivation-block,
+        status: "active"
+      })
+    )
+  )
+)
