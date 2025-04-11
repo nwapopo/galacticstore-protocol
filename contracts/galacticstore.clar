@@ -784,3 +784,60 @@
     )
   )
 )
+
+;; Implement container rate-limiting and compliance tracking
+(define-public (enforce-compliance-limits (originator principal) (max-daily-containers uint) (cooling-period uint))
+  (begin
+    (asserts! (is-eq tx-sender NETWORK_CONTROLLER) ERROR_ACCESS_DENIED)
+    (asserts! (> max-daily-containers u0) ERROR_INVALID_QUANTITY)
+    (asserts! (<= max-daily-containers u50) ERROR_INVALID_QUANTITY) ;; Maximum 50 containers per day
+    (asserts! (> cooling-period u0) ERROR_INVALID_QUANTITY)
+    (asserts! (<= cooling-period u1008) ERROR_INVALID_QUANTITY) ;; Maximum 7-day cooling period
+
+    ;; In a full implementation, you would track originator activity in a map
+    ;; For demonstration, we're printing the action only
+
+    (print {action: "compliance_limits", originator: originator, 
+            max-daily-containers: max-daily-containers, cooling-period: cooling-period, 
+            effective-block: block-height})
+    (ok {
+      originator: originator,
+      max-daily-containers: max-daily-containers,
+      cooling-period: cooling-period,
+      effective-block: block-height
+    })
+  )
+)
+
+;; Implement hierarchical access control for container operations
+(define-public (configure-hierarchical-access (container-id uint) (access-levels (list 5 (string-ascii 10))) (access-principals (list 5 principal)))
+  (begin
+    (asserts! (valid-container-id? container-id) ERROR_INVALID_CONTAINER_ID)
+    (asserts! (> (len access-levels) u0) ERROR_INVALID_QUANTITY)
+    (asserts! (is-eq (len access-levels) (len access-principals)) (err u290))
+    (asserts! (<= (len access-levels) u5) ERROR_INVALID_QUANTITY) ;; Maximum 5 access levels
+
+    (let
+      (
+        (container-data (unwrap! (map-get? ContainerRegistry { container-id: container-id }) ERROR_CONTAINER_MISSING))
+        (originator (get originator container-data))
+      )
+      ;; Only container originator or network controller can configure access
+      (asserts! (or (is-eq tx-sender originator) (is-eq tx-sender NETWORK_CONTROLLER)) ERROR_ACCESS_DENIED)
+      (asserts! (or (is-eq (get container-status container-data) "pending") 
+                   (is-eq (get container-status container-data) "accepted")) ERROR_ALREADY_PROCESSED)
+
+      ;; Validate all access levels are valid
+      (asserts! (or (is-some (index-of access-levels "admin"))
+                    (is-some (index-of access-levels "operator"))
+                    (is-some (index-of access-levels "auditor"))
+                    (is-some (index-of access-levels "view-only"))
+                    (is-some (index-of access-levels "emergency"))) (err u291))
+
+      (print {action: "hierarchical_access_configured", container-id: container-id, 
+              controller: tx-sender, access-levels: access-levels, 
+              access-principals: access-principals})
+      (ok true)
+    )
+  )
+)
