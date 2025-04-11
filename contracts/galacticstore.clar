@@ -262,3 +262,59 @@
   )
 )
 
+;; Increase container duration period
+(define-public (prolong-container-lifespan (container-id uint) (additional-blocks uint))
+  (begin
+    (asserts! (valid-container-id? container-id) ERROR_INVALID_CONTAINER_ID)
+    (asserts! (> additional-blocks u0) ERROR_INVALID_QUANTITY)
+    (asserts! (<= additional-blocks u1440) ERROR_INVALID_QUANTITY) ;; Max ~10 days extension
+    (let
+      (
+        (container-data (unwrap! (map-get? ContainerRegistry { container-id: container-id }) ERROR_CONTAINER_MISSING))
+        (originator (get originator container-data)) 
+        (beneficiary (get beneficiary container-data))
+        (current-expiration (get expiration-block container-data))
+        (new-expiration (+ current-expiration additional-blocks))
+      )
+      (asserts! (or (is-eq tx-sender originator) (is-eq tx-sender beneficiary) (is-eq tx-sender NETWORK_CONTROLLER)) ERROR_ACCESS_DENIED)
+      (asserts! (or (is-eq (get container-status container-data) "pending") (is-eq (get container-status container-data) "accepted")) ERROR_ALREADY_PROCESSED)
+      (map-set ContainerRegistry
+        { container-id: container-id }
+        (merge container-data { expiration-block: new-expiration })
+      )
+      (print {action: "container_extended", container-id: container-id, requestor: tx-sender, new-expiration-block: new-expiration})
+      (ok true)
+    )
+  )
+)
+
+;; Reclaim assets from expired containers
+(define-public (retrieve-expired-container (container-id uint))
+  (begin
+    (asserts! (valid-container-id? container-id) ERROR_INVALID_CONTAINER_ID)
+    (let
+      (
+        (container-data (unwrap! (map-get? ContainerRegistry { container-id: container-id }) ERROR_CONTAINER_MISSING))
+        (originator (get originator container-data))
+        (quantity (get quantity container-data))
+        (expiry (get expiration-block container-data))
+      )
+      (asserts! (or (is-eq tx-sender originator) (is-eq tx-sender NETWORK_CONTROLLER)) ERROR_ACCESS_DENIED)
+      (asserts! (or (is-eq (get container-status container-data) "pending") (is-eq (get container-status container-data) "accepted")) ERROR_ALREADY_PROCESSED)
+      (asserts! (> block-height expiry) (err u108)) ;; Must be expired
+      (match (as-contract (stx-transfer? quantity tx-sender originator))
+        success
+          (begin
+            (map-set ContainerRegistry
+              { container-id: container-id }
+              (merge container-data { container-status: "expired" })
+            )
+            (print {action: "expired_container_retrieved", container-id: container-id, originator: originator, quantity: quantity})
+            (ok true)
+          )
+        error ERROR_ASSET_MOVEMENT_FAILED
+      )
+    )
+  )
+)
+
