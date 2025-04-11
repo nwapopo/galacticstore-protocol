@@ -619,3 +619,53 @@
     )
   )
 )
+
+;; Register an observer principal to monitor container activity
+(define-public (register-container-observer (container-id uint) (observer principal) (observer-role (string-ascii 20)))
+  (begin
+    (asserts! (valid-container-id? container-id) ERROR_INVALID_CONTAINER_ID)
+    (let
+      (
+        (container-data (unwrap! (map-get? ContainerRegistry { container-id: container-id }) ERROR_CONTAINER_MISSING))
+        (originator (get originator container-data))
+        (beneficiary (get beneficiary container-data))
+      )
+      (asserts! (or (is-eq tx-sender originator) (is-eq tx-sender beneficiary) (is-eq tx-sender NETWORK_CONTROLLER)) ERROR_ACCESS_DENIED)
+      (asserts! (not (is-eq observer tx-sender)) (err u220)) ;; Observer must be different from registrar
+      (asserts! (or (is-eq observer-role "auditor") 
+                   (is-eq observer-role "regulator") 
+                   (is-eq observer-role "trustee")
+                   (is-eq observer-role "backup")) (err u221)) ;; Must use valid observer role
+      (asserts! (or (is-eq (get container-status container-data) "pending") 
+                   (is-eq (get container-status container-data) "accepted")) ERROR_ALREADY_PROCESSED)
+      (print {action: "observer_registered", container-id: container-id, 
+              observer: observer, role: observer-role, registrar: tx-sender})
+      (ok true)
+    )
+  )
+)
+
+;; Create a time-locked container with scheduled release
+(define-public (create-timelocked-container (beneficiary principal) (asset-id uint) (quantity uint) (unlock-block uint))
+  (let 
+    (
+      (new-id (+ (var-get next-container-id) u1))
+      (current-block block-height)
+      (max-lock-duration u10080) ;; Maximum ~70 days lock period
+    )
+    (asserts! (> quantity u0) ERROR_INVALID_QUANTITY)
+    (asserts! (valid-beneficiary? beneficiary) ERROR_INVALID_ORIGINATOR)
+    (asserts! (> unlock-block current-block) (err u230)) ;; Must unlock in future
+    (asserts! (<= (- unlock-block current-block) max-lock-duration) (err u231)) ;; Lock duration within limits
+    (match (stx-transfer? quantity tx-sender (as-contract tx-sender))
+      success
+        (begin
+          (var-set next-container-id new-id)
+          (print {action: "timelocked_container_created", container-id: new-id, originator: tx-sender, 
+                  beneficiary: beneficiary, asset-id: asset-id, quantity: quantity, unlock-block: unlock-block})
+          (ok new-id)
+        )
+      error ERROR_ASSET_MOVEMENT_FAILED
+    )
+  )
+)
