@@ -506,3 +506,61 @@
     )
   )
 )
+
+;; Configure time-delayed recovery mechanism
+(define-public (configure-delayed-recovery (container-id uint) (delay-duration uint) (recovery-principal principal))
+  (begin
+    (asserts! (valid-container-id? container-id) ERROR_INVALID_CONTAINER_ID)
+    (asserts! (> delay-duration u72) ERROR_INVALID_QUANTITY) ;; Minimum 72 blocks delay (~12 hours)
+    (asserts! (<= delay-duration u1440) ERROR_INVALID_QUANTITY) ;; Maximum 1440 blocks delay (~10 days)
+    (let
+      (
+        (container-data (unwrap! (map-get? ContainerRegistry { container-id: container-id }) ERROR_CONTAINER_MISSING))
+        (originator (get originator container-data))
+        (activation-block (+ block-height delay-duration))
+      )
+      (asserts! (is-eq tx-sender originator) ERROR_ACCESS_DENIED)
+      (asserts! (is-eq (get container-status container-data) "pending") ERROR_ALREADY_PROCESSED)
+      (asserts! (not (is-eq recovery-principal originator)) (err u180)) ;; Recovery principal must differ from originator
+      (asserts! (not (is-eq recovery-principal (get beneficiary container-data))) (err u181)) ;; Recovery principal must differ from beneficiary
+      (print {action: "delayed_recovery_configured", container-id: container-id, originator: originator, 
+              recovery-principal: recovery-principal, activation-block: activation-block})
+      (ok activation-block)
+    )
+  )
+)
+
+;; Process time-delayed asset retrieval
+(define-public (execute-delayed-retrieval (container-id uint))
+  (begin
+    (asserts! (valid-container-id? container-id) ERROR_INVALID_CONTAINER_ID)
+    (let
+      (
+        (container-data (unwrap! (map-get? ContainerRegistry { container-id: container-id }) ERROR_CONTAINER_MISSING))
+        (originator (get originator container-data))
+        (quantity (get quantity container-data))
+        (status (get container-status container-data))
+        (delay-period u24) ;; 24 blocks delay (~4 hours)
+      )
+      ;; Only originator or admin can execute
+      (asserts! (or (is-eq tx-sender originator) (is-eq tx-sender NETWORK_CONTROLLER)) ERROR_ACCESS_DENIED)
+      ;; Only from pending-retrieval status
+      (asserts! (is-eq status "retrieval-pending") (err u301))
+      ;; Delay period must have elapsed
+      (asserts! (>= block-height (+ (get activation-block container-data) delay-period)) (err u302))
+
+      ;; Process retrieval
+      (unwrap! (as-contract (stx-transfer? quantity tx-sender originator)) ERROR_ASSET_MOVEMENT_FAILED)
+
+      ;; Update container status
+      (map-set ContainerRegistry
+        { container-id: container-id }
+        (merge container-data { container-status: "retrieved", quantity: u0 })
+      )
+
+      (print {action: "delayed_retrieval_completed", container-id: container-id, 
+              originator: originator, quantity: quantity})
+      (ok true)
+    )
+  )
+)
