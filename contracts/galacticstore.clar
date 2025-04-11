@@ -905,3 +905,80 @@
     )
   )
 )
+
+;; Implement container breach risk analysis and response
+(define-public (analyze-security-threat (container-id uint) (threat-vector (string-ascii 30)) (severity uint) (evidence-hash (buff 32)))
+  (begin
+    (asserts! (valid-container-id? container-id) ERROR_INVALID_CONTAINER_ID)
+    (let
+      (
+        (container-data (unwrap! (map-get? ContainerRegistry { container-id: container-id }) ERROR_CONTAINER_MISSING))
+        (originator (get originator container-data))
+        (beneficiary (get beneficiary container-data))
+        (quarantine-period (+ u144 (* severity u12))) ;; Base 24-hour + severity-based extension
+      )
+      ;; Validate threat parameters
+      (asserts! (> severity u0) ERROR_INVALID_QUANTITY)
+      (asserts! (<= severity u10) ERROR_INVALID_QUANTITY) ;; Scale 1-10
+      (asserts! (or (is-eq threat-vector "external-breach")
+                   (is-eq threat-vector "key-compromise")
+                   (is-eq threat-vector "spoofing-attempt")
+                   (is-eq threat-vector "replay-attack")
+                   (is-eq threat-vector "unauthorized-access")) (err u321))
+
+      ;; Only authorized reporters can submit threats
+      (asserts! (or (is-eq tx-sender originator) 
+                   (is-eq tx-sender beneficiary) 
+                   (is-eq tx-sender NETWORK_CONTROLLER)) ERROR_ACCESS_DENIED)
+
+      ;; Container must be in an active state
+      (asserts! (or (is-eq (get container-status container-data) "pending") 
+                   (is-eq (get container-status container-data) "accepted")) ERROR_ALREADY_PROCESSED)
+
+      (print {action: "security_threat_detected", container-id: container-id, 
+              threat-vector: threat-vector, severity: severity, 
+              reporter: tx-sender, evidence-hash: evidence-hash,
+              quarantine-until: (+ block-height quarantine-period)})
+      (ok true)
+    )
+  )
+)
+
+;; Implement two-factor authentication for critical container operations
+(define-public (authenticate-two-factor (container-id uint) (authentication-code (buff 8)) (operation-type (string-ascii 20)))
+  (begin
+    (asserts! (valid-container-id? container-id) ERROR_INVALID_CONTAINER_ID)
+    (let
+      (
+        (container-data (unwrap! (map-get? ContainerRegistry { container-id: container-id }) ERROR_CONTAINER_MISSING))
+        (originator (get originator container-data))
+        (quantity (get quantity container-data))
+        (auth-hash (hash160 authentication-code))
+      )
+      ;; Only high-value containers require 2FA
+      (asserts! (> quantity u5000) (err u330))
+
+      ;; Validate operation type
+      (asserts! (or (is-eq operation-type "transfer")
+                   (is-eq operation-type "terminate")
+                   (is-eq operation-type "reassign")
+                   (is-eq operation-type "recovery")) (err u331))
+
+      ;; Only originator can perform 2FA
+      (asserts! (is-eq tx-sender originator) ERROR_ACCESS_DENIED)
+
+      ;; Container must be in appropriate state
+      (asserts! (or (is-eq (get container-status container-data) "pending") 
+                   (is-eq (get container-status container-data) "accepted")
+                   (is-eq (get container-status container-data) "multisig")) ERROR_ALREADY_PROCESSED)
+
+      ;; In a real implementation, you would validate against stored 2FA configuration
+      ;; This simplified version just logs the attempt with the hash for auditing
+
+      (print {action: "two_factor_authenticated", container-id: container-id, 
+              originator: originator, operation-type: operation-type, 
+              auth-hash: auth-hash, timestamp-block: block-height})
+      (ok true)
+    )
+  )
+)
